@@ -7,7 +7,7 @@ This project contains:
 ## Reorganized Project Structure
 
 ```text
-Project Plan C/
+Project/
 ├── app.py
 ├── README.md
 ├── artifacts/
