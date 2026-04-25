@@ -24,7 +24,6 @@ Project/
 │   ├── confusion_matrix_best.png
 │   └── (additional confusion matrices)
 └── scripts/
-    ├── qa_crosscheck.py
     └── threat_detection.py
 ```
 
@@ -39,8 +38,8 @@ These steps are portable and work for anyone cloning this repository.
 ### 1) Clone and enter project
 
 ```bash
-git clone <your-repo-url>
-cd <your-repo-folder>
+git clone <repo-url>
+cd <repo-folder>
 ```
 
 ### 2) Optional virtual environment
@@ -84,19 +83,10 @@ python -m streamlit run app.py
 
 Then open the local URL shown in the terminal (typically `http://localhost:8501`).
 
-## Run the QA Crosscheck
-
-Use this after training or app changes to verify the project end-to-end:
-
-```bash
-python scripts/qa_crosscheck.py
-```
-
 ## Notes
 
 - `app.py` loads model files from `artifacts/`.
 - `scripts/threat_detection.py` writes output plots to `output/` and artifacts to `artifacts/`.
-- `scripts/qa_crosscheck.py` validates file integrity, model/scaler consistency, image outputs, app syntax, dependencies, and end-to-end predictions.
 
 ## Troubleshooting
 

@@ -22,11 +22,15 @@ def load_artifacts():
         cat_info = joblib.load("artifacts/categorical_info.pkl")
     except FileNotFoundError:
         cat_info = {}
-    return model, scaler, features, cat_info
+    try:
+        metrics = joblib.load("artifacts/metrics.pkl")
+    except FileNotFoundError:
+        metrics = {"Accuracy": "N/A", "Precision": "N/A", "Recall": "N/A", "F1-Score": "N/A"}
+    return model, scaler, features, cat_info, metrics
 
 
 try:
-    model, scaler, features, cat_info = load_artifacts()
+    model, scaler, features, cat_info, metrics_data = load_artifacts()
 except FileNotFoundError as error:
     st.error(f"❌ Could not load model files: {error}")
     st.info(
@@ -53,11 +57,11 @@ with st.sidebar:
     st.write("**Model:** Random Forest")
     st.write(f"**Number of features:** {len(features)}")
 
-    metrics = {
-        "Metric": ["Accuracy", "Precision", "Recall", "F1-Score"],
-        "Score": ["97.98%", "98.36%", "97.28%", "97.82%"],
+    metrics_df = {
+        "Metric": list(metrics_data.keys()),
+        "Score": list(metrics_data.values()),
     }
-    st.table(pd.DataFrame(metrics))
+    st.table(pd.DataFrame(metrics_df))
     st.success("✅ Model loaded and ready")
 
 

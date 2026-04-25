@@ -356,17 +356,16 @@ def main():
     categorical_info = {col: X[col].unique().tolist() for col in cat_cols}
     joblib.dump(categorical_info, os.path.join(ARTIFACTS_DIR, "categorical_info.pkl"))
 
-    # To do feature selection on original features, we temporarily encode
-    X_oe = X.copy()
-    if cat_cols:
-        oe = OrdinalEncoder()
-        X_oe[cat_cols] = oe.fit_transform(X_oe[cat_cols])
-
-    X_train_oe, X_test_oe, y_train, y_test = train_test_split(
-        X_oe, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    # Ensure no data leakage: split FIRST
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
     )
-    X_train_raw = X.loc[X_train_oe.index]
-    X_test_raw = X.loc[X_test_oe.index]
+
+    # To do feature selection on original features, we temporarily encode ONLY the training set
+    X_train_oe = X_train_raw.copy()
+    if cat_cols:
+        oe = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+        X_train_oe[cat_cols] = oe.fit_transform(X_train_oe[cat_cols])
 
     print("\n=== STEP 4: Feature selection ===")
     selector_model = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE)
@@ -491,6 +490,12 @@ def main():
     joblib.dump(tuned_model, os.path.join(ARTIFACTS_DIR, "best_model.pkl"))
     joblib.dump(deploy_scaler, os.path.join(ARTIFACTS_DIR, "scaler.pkl"))
     joblib.dump(selected_features, os.path.join(ARTIFACTS_DIR, "feature_names.pkl"))
+    joblib.dump({
+        "Accuracy": f"{tuned_acc:.2%}",
+        "Precision": f"{tuned_prec:.2%}",
+        "Recall": f"{tuned_rec:.2%}",
+        "F1-Score": f"{tuned_f1:.2%}",
+    }, os.path.join(ARTIFACTS_DIR, "metrics.pkl"))
 
     # CLI prediction demo using one raw encoded test row.
     sample = X_test_raw.iloc[0][selected_features].to_dict()
