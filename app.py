@@ -18,11 +18,15 @@ def load_artifacts():
     model = joblib.load("artifacts/best_model.pkl")
     scaler = joblib.load("artifacts/scaler.pkl")
     features = joblib.load("artifacts/feature_names.pkl")
-    return model, scaler, features
+    try:
+        cat_info = joblib.load("artifacts/categorical_info.pkl")
+    except FileNotFoundError:
+        cat_info = {}
+    return model, scaler, features, cat_info
 
 
 try:
-    model, scaler, features = load_artifacts()
+    model, scaler, features, cat_info = load_artifacts()
 except FileNotFoundError as error:
     st.error(f"❌ Could not load model files: {error}")
     st.info(
@@ -70,26 +74,27 @@ def parse_numeric_input(raw_value: str) -> float:
 
 for index, feature in enumerate(features):
     with cols[index % 3]:
-        raw_value = st.text_input(
-            label=feature.replace("_", " ").title(),
-            value="0",
-            key=feature,
-        )
-        try:
-            input_values[feature] = parse_numeric_input(raw_value)
-        except ValueError:
-            st.error(f"Invalid number for {feature}. Using 0.")
-            input_values[feature] = 0.0
+        label_text = feature.replace("_", " ").title()
+        if feature in cat_info:
+            options = cat_info[feature]
+            val = st.selectbox(label=label_text, options=options, key=feature)
+            input_values[feature] = val
+        else:
+            raw_value = st.text_input(label=label_text, value="0", key=feature)
+            try:
+                input_values[feature] = parse_numeric_input(raw_value)
+            except ValueError:
+                st.error(f"Invalid number for {feature}. Using 0.")
+                input_values[feature] = 0.0
 
 analyze = st.button("🔍 Analyze Traffic", width="stretch", type="primary")
 
 if analyze:
     input_df = pd.DataFrame([input_values])[features]
     input_scaled = scaler.transform(input_df)
-    input_scaled_df = pd.DataFrame(input_scaled, columns=features)
 
-    prediction = model.predict(input_scaled_df)[0]
-    probability = model.predict_proba(input_scaled_df)[0]
+    prediction = model.predict(input_scaled)[0]
+    probability = model.predict_proba(input_scaled)[0]
 
     threat_prob = float(probability[1])
     normal_prob = float(probability[0])

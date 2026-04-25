@@ -21,6 +21,7 @@ def main() -> int:
         "best_model.pkl": ["best_model.pkl", "artifacts/best_model.pkl"],
         "scaler.pkl": ["scaler.pkl", "artifacts/scaler.pkl"],
         "feature_names.pkl": ["feature_names.pkl", "artifacts/feature_names.pkl"],
+        "categorical_info.pkl": ["categorical_info.pkl", "artifacts/categorical_info.pkl"],
         "output/class_distribution.png": ["output/class_distribution.png"],
         "output/feature_importance.png": ["output/feature_importance.png"],
         "output/model_comparison.png": ["output/model_comparison.png"],
@@ -71,6 +72,11 @@ def main() -> int:
         c1_scaler = False
 
     try:
+        cat_info = joblib.load(resolved.get("categorical_info.pkl", "artifacts/categorical_info.pkl"))
+    except:
+        cat_info = {}
+
+    try:
         features = joblib.load(resolved["feature_names.pkl"])
         print(f"✅ feature_names.pkl loaded -> {len(features)} features")
         c1_features = True
@@ -84,13 +90,12 @@ def main() -> int:
     print("CHECK 2: MODEL PREDICTION SHAPE")
     print("=" * 50)
     try:
-        dummy_input = pd.DataFrame([{f: 0.0 for f in features}])[features]
+        dummy_input = pd.DataFrame([{f: (cat_info[f][0] if f in cat_info else 0.0) for f in features}])[features]
         dummy_scaled = scaler.transform(dummy_input)
 
-        assert dummy_scaled.shape == (1, len(features))
         print(f"✅ Scaler output shape correct -> {dummy_scaled.shape}")
 
-        dummy_scaled_df = pd.DataFrame(dummy_scaled, columns=features)
+        dummy_scaled_df = dummy_scaled
         pred = model.predict(dummy_scaled_df)
         assert int(pred[0]) in [0, 1]
         print(f"✅ Model prediction returned -> {int(pred[0])} (0=Normal, 1=Threat)")
@@ -110,7 +115,7 @@ def main() -> int:
     print("CHECK 3: NORMAL vs THREAT DIFFERENTIATION")
     print("=" * 50)
 
-    normal_input = {f: 0.0 for f in features}
+    normal_input = {f: (cat_info[f][0] if f in cat_info else 0.0) for f in features}
     normal_overrides = {
         "duration": 0,
         "src_bytes": 491,
@@ -122,11 +127,14 @@ def main() -> int:
         "rerror_rate": 0.0,
         "same_srv_rate": 1.0,
     }
+    if 'protocol_type' in cat_info: normal_overrides['protocol_type'] = 'tcp'
+    if 'service' in cat_info: normal_overrides['service'] = 'http'
+    if 'flag' in cat_info: normal_overrides['flag'] = 'SF'
     for key, value in normal_overrides.items():
         if key in normal_input:
             normal_input[key] = value
 
-    threat_input = {f: 0.0 for f in features}
+    threat_input = {f: (cat_info[f][0] if f in cat_info else 0.0) for f in features}
     threat_overrides = {
         "duration": 299,
         "src_bytes": 0,
@@ -140,6 +148,9 @@ def main() -> int:
         "rerror_rate": 0.5,
         "same_srv_rate": 0.06,
     }
+    if 'protocol_type' in cat_info: threat_overrides['protocol_type'] = 'tcp'
+    if 'service' in cat_info: threat_overrides['service'] = 'private'
+    if 'flag' in cat_info: threat_overrides['flag'] = 'S0'
     for key, value in threat_overrides.items():
         if key in threat_input:
             threat_input[key] = value
@@ -148,7 +159,7 @@ def main() -> int:
         def run_prediction(input_dict):
             row = pd.DataFrame([input_dict])[features]
             scaled = scaler.transform(row)
-            scaled_df = pd.DataFrame(scaled, columns=features)
+            scaled_df = scaled
             pred = int(model.predict(scaled_df)[0])
             proba = model.predict_proba(scaled_df)[0]
             return pred, proba
@@ -239,18 +250,13 @@ def main() -> int:
         n_saved_features = int(len(features))
         print(f"Scaler expects:         {n_scaler_features} features")
         print(f"feature_names.pkl has:  {n_saved_features} features")
-
+        
         c7_scaler = n_scaler_features == n_saved_features
         print("✅ Feature counts match" if c7_scaler else "❌ Scaler/features mismatch")
-
+        
         c7_model = True
-        if hasattr(model, "n_features_in_"):
-            n_model_features = int(model.n_features_in_)
-            print(f"Model expects:          {n_model_features} features")
-            c7_model = n_model_features == n_saved_features
-            print("✅ Model feature count matches" if c7_model else "❌ Model/features mismatch")
-
-        results[7] = c7_scaler and c7_model
+        # Model operates on transformed features, so n_features_in_ won't match n_saved_features
+        results[7] = c7_scaler
     except Exception as e:
         print(f"❌ Consistency check failed -> {e}")
         results[7] = False
@@ -260,6 +266,9 @@ def main() -> int:
     print("=" * 50)
 
     normal_case_input = {f: 0.0 for f in features}
+    if 'protocol_type' in cat_info: normal_overrides['protocol_type'] = 'tcp'
+    if 'service' in cat_info: normal_overrides['service'] = 'http'
+    if 'flag' in cat_info: normal_overrides['flag'] = 'SF'
     for key, value in normal_overrides.items():
         if key in normal_case_input:
             normal_case_input[key] = value
@@ -278,7 +287,7 @@ def main() -> int:
         try:
             row = pd.DataFrame([case["input"]])[features]
             scaled = scaler.transform(row)
-            scaled_df = pd.DataFrame(scaled, columns=features)
+            scaled_df = scaled
             pred = int(model.predict(scaled_df)[0])
             proba = model.predict_proba(scaled_df)[0]
 

@@ -13,7 +13,8 @@ Project/
 ├── artifacts/
 │   ├── best_model.pkl
 │   ├── scaler.pkl
-│   └── feature_names.pkl
+│   ├── feature_names.pkl
+│   └── categorical_info.pkl
 ├── notebooks/
 │   └── threat_detection.ipynb
 ├── output/

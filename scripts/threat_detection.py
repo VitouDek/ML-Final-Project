@@ -21,7 +21,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, OneHotEncoder
+from sklearn.compose import ColumnTransformer
 from sklearn.svm import LinearSVC, SVC
 from sklearn.tree import DecisionTreeClassifier
 
@@ -36,23 +37,13 @@ os.makedirs(ARTIFACTS_DIR, exist_ok=True)
 
 
 def download_dataset():
-    options = [
-        ("sampadab17/network-intrusion-detection", "Option A"),
-        ("hassan06/nslkdd", "Option B"),
-        ("cicdataset/cicids2017-small", "Option C"),
-    ]
-
-    last_error = None
-    for dataset_id, option_name in options:
-        try:
-            path = kagglehub.dataset_download(dataset_id)
-            print(f"Downloaded {option_name}: {dataset_id}")
-            return dataset_id, path
-        except Exception as exc:  # pragma: no cover - network/auth behavior varies
-            last_error = exc
-            print(f"Failed {option_name}: {dataset_id} -> {exc}")
-
-    raise RuntimeError(f"Could not download any dataset. Last error: {last_error}")
+    dataset_id = "sampadab17/network-intrusion-detection"
+    try:
+        path = kagglehub.dataset_download(dataset_id)
+        print(f"Downloaded: {dataset_id}")
+        return dataset_id, path
+    except Exception as exc:
+        raise RuntimeError(f"Could not download dataset. Error: {exc}")
 
 
 def find_first_csv(dataset_path):
@@ -293,14 +284,13 @@ def train_and_evaluate(models, X_train, X_test, y_train, y_test):
 def predict_threat(input_dict, model, scaler, feature_names):
     row = pd.DataFrame([input_dict]).reindex(columns=feature_names, fill_value=0)
     row_scaled = scaler.transform(row)
-    row_selected = pd.DataFrame(row_scaled, columns=feature_names)
 
-    prediction = int(model.predict(row_selected)[0])
+    prediction = int(model.predict(row_scaled)[0])
     if hasattr(model, "predict_proba"):
-        probability = float(model.predict_proba(row_selected)[0][1])
+        probability = float(model.predict_proba(row_scaled)[0][1])
     else:
         # Approximate confidence for models without predict_proba.
-        decision = model.decision_function(row_selected)
+        decision = model.decision_function(row_scaled)
         probability = float(1 / (1 + np.exp(-decision[0])))
 
     label = "THREAT DETECTED" if prediction == 1 else "NORMAL"
@@ -359,29 +349,64 @@ def main():
     class_dist_path = os.path.join(OUTPUT_DIR, "class_distribution.png")
     save_class_distribution(y, class_dist_path)
 
-    # Encode categorical features.
-    X = pd.get_dummies(X, drop_first=False)
+    # Handle categorical columns
+    cat_cols = ["protocol_type", "service", "flag"]
+    cat_cols = [c for c in cat_cols if c in X.columns]
+    
+    categorical_info = {col: X[col].unique().tolist() for col in cat_cols}
+    joblib.dump(categorical_info, os.path.join(ARTIFACTS_DIR, "categorical_info.pkl"))
 
-    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        random_state=RANDOM_STATE,
-        stratify=y,
+    # To do feature selection on original features, we temporarily encode
+    X_oe = X.copy()
+    if cat_cols:
+        oe = OrdinalEncoder()
+        X_oe[cat_cols] = oe.fit_transform(X_oe[cat_cols])
+
+    X_train_oe, X_test_oe, y_train, y_test = train_test_split(
+        X_oe, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    )
+    X_train_raw = X.loc[X_train_oe.index]
+    X_test_raw = X.loc[X_test_oe.index]
+
+    print("\n=== STEP 4: Feature selection ===")
+    selector_model = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE)
+    selector_model.fit(X_train_oe, y_train)
+
+    k = min(15, X_train_oe.shape[1])
+    importances = selector_model.feature_importances_
+    top_idx = np.argsort(importances)[-k:]
+
+    selected_features = X_train_oe.columns[top_idx].tolist()
+    selected_features = [str(c) for c in selected_features]  # Convert from numpy strings
+    feature_scores = importances[top_idx]
+
+    selected_features = save_top_features(
+        selected_features,
+        feature_scores,
+        os.path.join(OUTPUT_DIR, "feature_importance.png"),
+    )
+    selected_features = [str(c) for c in selected_features]
+
+    # Build ColumnTransformer based on selected features
+    sel_cat_cols = [str(c) for c in selected_features if c in cat_cols]
+    sel_num_cols = [str(c) for c in selected_features if c not in cat_cols]
+
+    # Important: output dense arrays to work smoothly with SMOTE/RandomForest
+    deploy_scaler = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), sel_num_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), sel_cat_cols),
+        ]
     )
 
-    # Scale all features after train/test split to avoid leakage.
-    scaler = StandardScaler()
-    X_train_scaled = pd.DataFrame(
-        scaler.fit_transform(X_train_raw),
-        columns=X_train_raw.columns,
-        index=X_train_raw.index,
-    )
-    X_test_scaled = pd.DataFrame(
-        scaler.transform(X_test_raw),
-        columns=X_test_raw.columns,
-        index=X_test_raw.index,
-    )
+    X_train_selected = X_train_raw[selected_features]
+    X_test_selected = X_test_raw[selected_features]
+
+    X_train_scaled_array = deploy_scaler.fit_transform(X_train_selected)
+    X_test_scaled_array = deploy_scaler.transform(X_test_selected)
+
+    X_train_scaled = pd.DataFrame(X_train_scaled_array, index=X_train_raw.index)
+    X_test_scaled = pd.DataFrame(X_test_scaled_array, index=X_test_raw.index)
 
     # Class imbalance check with SMOTE if minority < 20%.
     class_ratio = y_train.value_counts(normalize=True)
@@ -394,39 +419,10 @@ def main():
     else:
         X_train_balanced, y_train_balanced = X_train_scaled, y_train
         print(f"SMOTE not required. Minority ratio: {minority_ratio:.2%}")
-
-    print("\n=== STEP 4: Feature selection ===")
-
-    # Use Random Forest importances to select top features (prompt allows this).
-    selector_model = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE)
-    selector_model.fit(X_train_balanced, y_train_balanced)
-
-    k = min(15, X_train_balanced.shape[1])
-    importances = selector_model.feature_importances_
-    top_idx = np.argsort(importances)[-k:]
-
-    selected_features = X_train_balanced.columns[top_idx].tolist()
-    feature_scores = importances[top_idx]
-
-    selected_features = save_top_features(
-        selected_features,
-        feature_scores,
-        os.path.join(OUTPUT_DIR, "feature_importance.png"),
-    )
-
-    X_train_selected = X_train_balanced[selected_features]
-    X_test_selected = X_test_scaled[selected_features]
-
-    # Build deployment scaler aligned to selected features using parameters from the
-    # full fitted scaler. Standard scaling is per feature, so subset params are valid.
-    selected_indices = [X_train_raw.columns.get_loc(col) for col in selected_features]
-    deploy_scaler = StandardScaler()
-    deploy_scaler.mean_ = scaler.mean_[selected_indices]
-    deploy_scaler.var_ = scaler.var_[selected_indices]
-    deploy_scaler.scale_ = scaler.scale_[selected_indices]
-    deploy_scaler.n_features_in_ = len(selected_features)
-    deploy_scaler.feature_names_in_ = np.array(selected_features, dtype=object)
-    deploy_scaler.n_samples_seen_ = scaler.n_samples_seen_
+        
+    # We set X_train_selected to X_train_balanced for model training to expect numerical arrays
+    X_train_selected = X_train_balanced
+    X_test_selected = X_test_scaled
 
     print("Selected features (top 15):")
     print(selected_features)
@@ -546,6 +542,7 @@ def main():
     print(" -", os.path.join("artifacts", "best_model.pkl"))
     print(" -", os.path.join("artifacts", "scaler.pkl"))
     print(" -", os.path.join("artifacts", "feature_names.pkl"))
+    print(" -", os.path.join("artifacts", "categorical_info.pkl"))
 
 
 if __name__ == "__main__":
